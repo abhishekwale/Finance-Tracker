@@ -1,0 +1,116 @@
+name: Dependency File Sync Check
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-deps:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so diff works
+
+      - name: Check dependency file sync
+        id: check
+        run: |
+          git fetch origin ${{ github.base_ref }}
+
+          # Identify changed files
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }})
+          
+          MISMATCH=false
+
+          # Check Backend directory
+          if echo "$CHANGED_FILES" | grep -q "Backend/package.json" && ! echo "$CHANGED_FILES" | grep -q "Backend/package-lock.json"; then
+            echo "Mismatch in Backend: package.json changed but package-lock.json did not."
+            MISMATCH=true
+          elif ! echo "$CHANGED_FILES" | grep -q "Backend/package.json" && echo "$CHANGED_FILES" | grep -q "Backend/package-lock.json"; then
+            echo "Mismatch in Backend: package-lock.json changed but package.json did not."
+            MISMATCH=true
+          fi
+
+          # Check Frontend directory
+          if echo "$CHANGED_FILES" | grep -q "Frontend/my-project/package.json" && ! echo "$CHANGED_FILES" | grep -q "Frontend/my-project/package-lock.json"; then
+            echo "Mismatch in Frontend: package.json changed but package-lock.json did not."
+            MISMATCH=true
+          elif ! echo "$CHANGED_FILES" | grep -q "Frontend/my-project/package.json" && echo "$CHANGED_FILES" | grep -q "Frontend/my-project/package-lock.json"; then
+            echo "Mismatch in Frontend: package-lock.json changed but package.json did not."
+            MISMATCH=true
+          fi
+
+          echo "mismatch=$MISMATCH" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack (on mismatch)
+        if: steps.check.outputs.mismatch == 'true'
+        run: |
+          # The SLACK_WEBHOOK_URL secret must be defined in your GitHub Repository settings.
+          # Go to: Settings -> Secrets and variables -> Actions -> New repository secret
+          # Name: SLACK_WEBHOOK_URL
+          # Value: <Your Slack Webhook URL>
+          
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"blocks\": [
+              {
+                \"type\": \"header\",
+                \"text\": {
+                  \"type\": \"plain_text\",
+                  \"text\": \"❌ Dependency Sync Issue Detected\"
+                }
+              },
+              {
+                \"type\": \"section\",
+                \"fields\": [
+                  {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Repository:*\n${{ github.repository }}\"
+                  },
+                  {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*PR Number:*\n#${{ github.event.pull_request.number }}\"
+                  },
+                  {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Author:*\n${{ github.event.pull_request.user.login }}\"
+                  },
+                  {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Branch:*\n${{ github.head_ref }}\"
+                  }
+                ]
+              },
+              {
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"⚠️ *Mismatch Detected:*\\nEither *package.json* or *package-lock.json* was modified without updating the other.\"
+                }
+              },
+              {
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*Expected Behavior:*\\n• Both files should be updated together\\n• Ensures consistent dependency resolution\"
+                }
+              },
+              {
+                \"type\": \"actions\",
+                \"elements\": [
+                  {
+                    \"type\": \"button\",
+                    \"text\": {
+                      \"type\": \"plain_text\",
+                      \"text\": \"View Pull Request\"
+                    },
+                    \"url\": \"${{ github.event.pull_request.html_url }}\",
+                    \"style\": \"primary\"
+                  }
+                ]
+              }
+            ]
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+
